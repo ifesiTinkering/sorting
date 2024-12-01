@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <time.h> // For measuring time
 
 // Merge function for merge sort
 void merge(int *arr, int left, int mid, int right) {
@@ -43,32 +44,31 @@ void mergeSort(int *arr, int left, int right) {
     }
 }
 
-// Write sorted data to an output file
-int writeToFile(const char *filename, int *data, size_t num_elements) {
-    FILE *out_file = fopen(filename, "w");
-    if (!out_file) {
-        perror("Failed to open output file");
+// Overwrite the same file with sorted data
+int writeToSameFile(const char *filename, int *data, size_t num_elements) {
+    FILE *file = fopen(filename, "w");
+    if (!file) {
+        perror("Failed to open file for writing");
         return -1;
     }
 
     for (size_t i = 0; i < num_elements; i++) {
-        if (fprintf(out_file, "%d\n", data[i]) < 0) {
-            perror("Failed to write to output file");
-            fclose(out_file);
+        if (fprintf(file, "%d\n", data[i]) < 0) {
+            perror("Failed to write to file");
+            fclose(file);
             return -1;
         }
     }
 
-    fclose(out_file);
+    fclose(file);
     return 0;
 }
 
 int main() {
     const char *input_filename = "random_numbers.txt"; // File containing 3 GB of integers
-    const char *output_filename = "sorted_numbers.txt"; // File to store sorted integers
 
     // Open the input file
-    int fd = open(input_filename, O_RDONLY);
+    int fd = open(input_filename, O_RDWR); // Open with read and write permissions
     if (fd == -1) {
         perror("Failed to open input file");
         return EXIT_FAILURE;
@@ -84,7 +84,7 @@ int main() {
     size_t file_size = sb.st_size;
 
     // Memory-map the file
-    int *data = mmap(NULL, file_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    int *data = mmap(NULL, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (data == MAP_FAILED) {
         perror("Failed to map file to memory");
         close(fd);
@@ -103,19 +103,26 @@ int main() {
 
     // Sort the data
     size_t num_elements = file_size / sizeof(int);
+
+    // Measure sorting time
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
     mergeSort(data, 0, num_elements - 1);
+    clock_gettime(CLOCK_MONOTONIC, &end);
 
-    printf("Sorting complete. Writing sorted data to output file...\n");
+    long long nanoseconds = (end.tv_sec - start.tv_sec) * 1000000000LL + (end.tv_nsec - start.tv_nsec);
+    printf("Sorting complete. Time taken: %lld nanoseconds.\n", nanoseconds);
 
-    // Write sorted data to the output file
-    if (writeToFile(output_filename, data, num_elements) != 0) {
-        fprintf(stderr, "Failed to write sorted data to output file\n");
+    // Overwrite the same file with sorted data
+    printf("Writing sorted data back to the same file...\n");
+    if (writeToSameFile(input_filename, data, num_elements) != 0) {
+        fprintf(stderr, "Failed to write sorted data to file\n");
         munlock(data, file_size);
         munmap(data, file_size);
         return EXIT_FAILURE;
     }
 
-    printf("Sorted data written to '%s'.\n", output_filename);
+    printf("Sorted data written back to '%s'.\n", input_filename);
 
     // Unlock and unmap memory
     if (munlock(data, file_size) != 0) {
