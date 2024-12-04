@@ -8,39 +8,36 @@
 #include <string.h>
 #include <time.h> // For measuring time
 
-// Merge function for merge sort
-void merge(int *arr, int left, int mid, int right) {
-    int n1 = mid - left + 1;
-    int n2 = right - mid;
+// Merge function using shared buffer
+void merge(int *arr, int left, int mid, int right, int *tempBuffer) {
+    int i = left, j = mid + 1, k = 0;
 
-    int *leftArr = (int *)malloc(n1 * sizeof(int));
-    int *rightArr = (int *)malloc(n2 * sizeof(int));
-
-    for (int i = 0; i < n1; i++) leftArr[i] = arr[left + i];
-    for (int j = 0; j < n2; j++) rightArr[j] = arr[mid + 1 + j];
-
-    int i = 0, j = 0, k = left;
-    while (i < n1 && j < n2) {
-        if (leftArr[i] <= rightArr[j]) {
-            arr[k++] = leftArr[i++];
+    // Merge the two halves into the temporary buffer
+    while (i <= mid && j <= right) {
+        if (arr[i] <= arr[j]) {
+            tempBuffer[k++] = arr[i++];
         } else {
-            arr[k++] = rightArr[j++];
+            tempBuffer[k++] = arr[j++];
         }
     }
-    while (i < n1) arr[k++] = leftArr[i++];
-    while (j < n2) arr[k++] = rightArr[j++];
+    while (i <= mid) tempBuffer[k++] = arr[i++];
+    while (j <= right) tempBuffer[k++] = arr[j++];
 
-    free(leftArr);
-    free(rightArr);
+    // Copy the sorted data back into the original array
+    memcpy(arr + left, tempBuffer, (right - left + 1) * sizeof(int));
 }
 
-// Merge sort function
-void mergeSort(int *arr, int left, int right) {
+// Merge sort function with shared buffer
+void mergeSortWithBuffer(int *arr, int left, int right, int *tempBuffer) {
     if (left < right) {
         int mid = left + (right - left) / 2;
-        mergeSort(arr, left, mid);
-        mergeSort(arr, mid + 1, right);
-        merge(arr, left, mid, right);
+
+        // Recursive calls for left and right halves
+        mergeSortWithBuffer(arr, left, mid, tempBuffer);
+        mergeSortWithBuffer(arr, mid + 1, right, tempBuffer);
+
+        // Merge the two halves
+        merge(arr, left, mid, right, tempBuffer);
     }
 }
 
@@ -65,7 +62,7 @@ int writeToSameFile(const char *filename, int *data, size_t num_elements) {
 }
 
 int main() {
-    const char *input_filename = "random_numbers.txt"; // File containing 3 GB of integers
+    const char *input_filename = "random_numbers.txt"; // File containing integers
 
     // Open the input file
     int fd = open(input_filename, O_RDWR); // Open with read and write permissions
@@ -104,10 +101,19 @@ int main() {
     // Sort the data
     size_t num_elements = file_size / sizeof(int);
 
+    // Allocate shared buffer for merging
+    int *tempBuffer = (int *)malloc(num_elements * sizeof(int));
+    if (!tempBuffer) {
+        perror("Failed to allocate temporary buffer");
+        munlock(data, file_size);
+        munmap(data, file_size);
+        return EXIT_FAILURE;
+    }
+
     // Measure sorting time
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    mergeSort(data, 0, num_elements - 1);
+    mergeSortWithBuffer(data, 0, num_elements - 1, tempBuffer);
     clock_gettime(CLOCK_MONOTONIC, &end);
 
     long long nanoseconds = (end.tv_sec - start.tv_sec) * 1000000000LL + (end.tv_nsec - start.tv_nsec);
@@ -117,12 +123,16 @@ int main() {
     printf("Writing sorted data back to the same file...\n");
     if (writeToSameFile(input_filename, data, num_elements) != 0) {
         fprintf(stderr, "Failed to write sorted data to file\n");
+        free(tempBuffer);
         munlock(data, file_size);
         munmap(data, file_size);
         return EXIT_FAILURE;
     }
 
     printf("Sorted data written back to '%s'.\n", input_filename);
+
+    // Free the temporary buffer
+    free(tempBuffer);
 
     // Unlock and unmap memory
     if (munlock(data, file_size) != 0) {
