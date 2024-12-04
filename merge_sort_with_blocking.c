@@ -1,74 +1,83 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-#include <time.h>
+#include <string.h>
+#include <time.h> // For measuring time
 
-// Cache size constants (adjust as needed)
-#define L1_CACHE_SIZE 32 * 1024  // 32 KB
-#define ELEMENT_SIZE sizeof(int)
-#define BLOCK_SIZE (L1_CACHE_SIZE / ELEMENT_SIZE)  // Number of integers per block
+// Set block size to align with cache sizes (L2 or L3)
+#define BLOCK_SIZE (1024 * 1024) // 1 MB (aligned with L2 cache size)
 
-// Insertion sort for small chunks
-void insertionSort(int *arr, int left, int right) {
-    for (int i = left + 1; i <= right; i++) {
-        int key = arr[i];
-        int j = i - 1;
-        while (j >= left && arr[j] > key) {
-            arr[j + 1] = arr[j];
-            j--;
-        }
-        arr[j + 1] = key;
-    }
-}
+// Merge function for merge sort with reusable buffer
+void merge(int *arr, int left, int mid, int right, int *tempBuffer) {
+    int i = left, j = mid + 1, k = 0;
 
-// Merge function for merge sort
-void merge(int *arr, int left, int mid, int right) {
-    int n1 = mid - left + 1;
-    int n2 = right - mid;
-
-    int *leftArr = (int *)malloc(n1 * sizeof(int));
-    int *rightArr = (int *)malloc(n2 * sizeof(int));
-
-    for (int i = 0; i < n1; i++) leftArr[i] = arr[left + i];
-    for (int j = 0; j < n2; j++) rightArr[j] = arr[mid + 1 + j];
-
-    int i = 0, j = 0, k = left;
-    while (i < n1 && j < n2) {
-        if (leftArr[i] <= rightArr[j]) {
-            arr[k++] = leftArr[i++];
+    // Merge the two halves into the temp buffer
+    while (i <= mid && j <= right) {
+        if (arr[i] <= arr[j]) {
+            tempBuffer[k++] = arr[i++];
         } else {
-            arr[k++] = rightArr[j++];
+            tempBuffer[k++] = arr[j++];
         }
     }
-    while (i < n1) arr[k++] = leftArr[i++];
-    while (j < n2) arr[k++] = rightArr[j++];
+    while (i <= mid) tempBuffer[k++] = arr[i++];
+    while (j <= right) tempBuffer[k++] = arr[j++];
 
-    free(leftArr);
-    free(rightArr);
+    // Copy the sorted data back to the original array
+    memcpy(arr + left, tempBuffer, (right - left + 1) * sizeof(int));
 }
 
 // Merge sort function with blocking
-void mergeSortBlocked(int *arr, int left, int right) {
-    // Base case: use insertion sort for chunks smaller than the block size
+void mergeSortBlocked(int *arr, int left, int right, int *tempBuffer) {
+    // Base case: use insertion sort for chunks smaller than BLOCK_SIZE
     if (right - left + 1 <= BLOCK_SIZE) {
-        insertionSort(arr, left, right);
+        for (int i = left + 1; i <= right; i++) {
+            int key = arr[i];
+            int j = i - 1;
+            while (j >= left && arr[j] > key) {
+                arr[j + 1] = arr[j];
+                j--;
+            }
+            arr[j + 1] = key;
+        }
         return;
     }
 
     int mid = left + (right - left) / 2;
-    mergeSortBlocked(arr, left, mid);
-    mergeSortBlocked(arr, mid + 1, right);
-    merge(arr, left, mid, right);
+
+    // Recursive calls for left and right halves
+    mergeSortBlocked(arr, left, mid, tempBuffer);
+    mergeSortBlocked(arr, mid + 1, right, tempBuffer);
+
+    // Merge the two halves
+    merge(arr, left, mid, right, tempBuffer);
 }
 
-// Main function (similar to your original)
+// Overwrite the same file with sorted data
+int writeToSameFile(const char *filename, int *data, size_t num_elements) {
+    FILE *file = fopen(filename, "w");
+    if (!file) {
+        perror("Failed to open file for writing");
+        return -1;
+    }
+
+    for (size_t i = 0; i < num_elements; i++) {
+        if (fprintf(file, "%d\n", data[i]) < 0) {
+            perror("Failed to write to file");
+            fclose(file);
+            return -1;
+        }
+    }
+
+    fclose(file);
+    return 0;
+}
+
 int main() {
-    const char *input_filename = "random_numbers.txt"; // File containing 3 GB of integers
+    const char *input_filename = "random_numbers.txt"; // File containing integers
 
     // Open the input file
     int fd = open(input_filename, O_RDWR); // Open with read and write permissions
@@ -107,29 +116,38 @@ int main() {
     // Sort the data
     size_t num_elements = file_size / sizeof(int);
 
+    // Allocate temporary buffer for merging
+    int *tempBuffer = (int *)malloc(BLOCK_SIZE * sizeof(int));
+    if (!tempBuffer) {
+        perror("Failed to allocate temporary buffer");
+        munlock(data, file_size);
+        munmap(data, file_size);
+        return EXIT_FAILURE;
+    }
+
     // Measure sorting time
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    mergeSortBlocked(data, 0, num_elements - 1);
+    mergeSortBlocked(data, 0, num_elements - 1, tempBuffer);
     clock_gettime(CLOCK_MONOTONIC, &end);
 
     long long nanoseconds = (end.tv_sec - start.tv_sec) * 1000000000LL + (end.tv_nsec - start.tv_nsec);
     printf("Sorting complete. Time taken: %lld nanoseconds.\n", nanoseconds);
 
     // Overwrite the same file with sorted data
-    FILE *file = fopen(input_filename, "w");
-    if (!file) {
-        perror("Failed to open file for writing");
+    printf("Writing sorted data back to the same file...\n");
+    if (writeToSameFile(input_filename, data, num_elements) != 0) {
+        fprintf(stderr, "Failed to write sorted data to file\n");
+        free(tempBuffer);
         munlock(data, file_size);
         munmap(data, file_size);
         return EXIT_FAILURE;
     }
-    for (size_t i = 0; i < num_elements; i++) {
-        fprintf(file, "%d\n", data[i]);
-    }
-    fclose(file);
 
     printf("Sorted data written back to '%s'.\n", input_filename);
+
+    // Free temporary buffer
+    free(tempBuffer);
 
     // Unlock and unmap memory
     if (munlock(data, file_size) != 0) {
