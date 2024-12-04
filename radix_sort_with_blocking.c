@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#include <immintrin.h>
 
 // Cache size constants (adjust as needed)
 #define L1_CACHE_SIZE 32 * 1024  // 32 KB

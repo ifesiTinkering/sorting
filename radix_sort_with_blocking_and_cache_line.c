@@ -7,62 +7,62 @@
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#include <immintrin.h>
 
-// Cache and block size constants
-#define CACHE_LINE_SIZE 64 // 64 bytes
+// Cache size constants (adjust as needed)
+#define L1_CACHE_SIZE 32 * 1024  // 32 KB
 #define ELEMENT_SIZE sizeof(int)
-#define BLOCK_SIZE (CACHE_LINE_SIZE / ELEMENT_SIZE * 4) // 4 cache lines per block
+#define BLOCK_SIZE (L1_CACHE_SIZE / ELEMENT_SIZE)  // Number of integers per block
 
-// Get the maximum value in the array
 int getMax(int *arr, size_t n) {
-    int max = arr[0];
-    for (size_t i = 1; i < n; i++) {
-        if (arr[i] > max) {
-            max = arr[i];
+    __m256i maxVec = _mm256_set1_epi32(arr[0]); // Initialize with the first element
+
+    for (size_t i = 0; i < n; i += 8) {
+        __m256i vec = _mm256_loadu_si256((__m256i *)&arr[i]); // Load 8 integers
+        maxVec = _mm256_max_epi32(maxVec, vec);              // Compute max for 8 integers
+    }
+
+    // Extract the maximum from the vector
+    int maxArray[8];
+    _mm256_storeu_si256((__m256i *)maxArray, maxVec);
+    int max = maxArray[0];
+    for (int i = 1; i < 8; i++) {
+        if (maxArray[i] > max) {
+            max = maxArray[i];
         }
     }
+
     return max;
 }
 
-// Counting sort for a specific digit (with aligned output)
-void countingSortBlocked(int *arr, size_t n, int exp, int *output) {
+
+void countingSortBlocked(int *arr, size_t n, int exp) {
+    int *output = (int *)malloc(n * sizeof(int));
     int count[10] = {0};
 
-    // Count occurrences of each digit
     for (size_t i = 0; i < n; i++) {
         count[(arr[i] / exp) % 10]++;
-        __builtin_prefetch(&arr[i + 1], 0, 1); // Prefetch next element
     }
 
-    // Update count[i] to hold the position of the next element with digit i
     for (int i = 1; i < 10; i++) {
         count[i] += count[i - 1];
     }
 
-    // Build the output array
     for (int i = n - 1; i >= 0; i--) {
-        int digit = (arr[i] / exp) % 10;
-        output[count[digit] - 1] = arr[i];
-        count[digit]--;
-        __builtin_prefetch(&arr[i - 1], 0, 1); // Prefetch previous element
+        output[count[(arr[i] / exp) % 10] - 1] = arr[i];
+        count[(arr[i] / exp) % 10]--;
     }
 
-    // Copy back to original array
     memcpy(arr, output, n * sizeof(int));
+    free(output);
 }
 
-// Radix sort with cache-line-aware blocking
+// Radix sort with blocking
 void radixSortBlocked(int *arr, size_t n) {
     int max = getMax(arr, n);
 
-    // Allocate aligned buffer
-    int *buffer = aligned_alloc(CACHE_LINE_SIZE, n * sizeof(int));
-    if (!buffer) {
-        perror("Failed to allocate aligned buffer");
-        exit(EXIT_FAILURE);
-    }
+    int *buffer = (int *)malloc(BLOCK_SIZE * sizeof(int)); // Temporary block buffer
 
-    // Perform radix sort
     for (int exp = 1; max / exp > 0; exp *= 10) {
         size_t offset = 0;
         while (offset < n) {
@@ -72,9 +72,9 @@ void radixSortBlocked(int *arr, size_t n) {
             }
 
             size_t block_size = block_end - offset;
-
-            // Sort the block for the current digit
-            countingSortBlocked(arr + offset, block_size, exp, buffer + offset);
+            memcpy(buffer, arr + offset, block_size * sizeof(int));
+            countingSortBlocked(buffer, block_size, exp);
+            memcpy(arr + offset, buffer, block_size * sizeof(int));
 
             offset += BLOCK_SIZE;
         }
@@ -85,7 +85,7 @@ void radixSortBlocked(int *arr, size_t n) {
 
 // Main function (similar to your original)
 int main() {
-    const char *input_filename = "random_numbers.txt"; // File containing integers
+    const char *input_filename = "random_numbers.txt"; // File containing 3 GB of integers
 
     // Open the input file
     int fd = open(input_filename, O_RDWR); // Open with read and write permissions
@@ -132,6 +132,7 @@ int main() {
 
     long long nanoseconds = (end.tv_sec - start.tv_sec) * 1000000000LL + (end.tv_nsec - start.tv_nsec);
     printf("Sorting complete. Time taken: %lld nanoseconds.\n", nanoseconds);
+
 
     printf("Sorted data written back to '%s'.\n", input_filename);
 
