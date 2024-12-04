@@ -120,18 +120,6 @@ int main() {
     long long nanoseconds = (end.tv_sec - start.tv_sec) * 1000000000LL + (end.tv_nsec - start.tv_nsec);
     printf("Sorting complete. Time taken: %lld nanoseconds.\n", nanoseconds);
 
-    // Overwrite the same file with sorted data
-    // FILE *file = fopen(input_filename, "w");
-    // if (!file) {
-    //     perror("Failed to open file for writing");
-    //     munlock(data, file_size);
-    //     munmap(data, file_size);
-    //     return EXIT_FAILURE;
-    // }
-    // for (size_t i = 0; i < num_elements; i++) {
-    //     fprintf(file, "%d\n", data[i]);
-    // }
-    // fclose(file);
 
     printf("Sorted data written back to '%s'.\n", input_filename);
 
